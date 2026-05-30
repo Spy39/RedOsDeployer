@@ -6,56 +6,74 @@ namespace RedOsDeployer.Services;
 public static class BashRunner
 {
     /// <summary>
-    /// Запускает Bash-скрипт, выводит логи в реальном времени и возвращает код завершения.
+    /// Запускает Bash-скрипт с красивым спиннером в UI и пишет подробности в лог-файл.
     /// </summary>
-    public static async Task<int> RunAsync(string scriptPath, string arguments = "")
+    public static async Task<int> RunWithSpinnerAsync(string taskTitle, string scriptName, string arguments = "")
     {
+        // Автоматически ищем скрипт в нашей сгенерированной папке scripts
+        string scriptPath = Path.Combine(AppPaths.Scripts, scriptName);
+
         if (!File.Exists(scriptPath))
         {
-            AnsiConsole.MarkupLine($"[red]Ошибка: Скрипт по пути '{scriptPath}' не найден![/]");
-            return -1; // -1 будет означать, что файл даже не запустился
+            LoggerService.LogError($"Скрипт не найден: {scriptPath}");
+            AnsiConsole.MarkupLine($"[red]Ошибка: Скрипт '{scriptName}' не найден в папке scripts![/]");
+            return -1;
         }
 
-        var processInfo = new ProcessStartInfo
-        {
-            FileName = "bash", // Запускаем сам интерпретатор bash
-            Arguments = $"{scriptPath} {arguments}", // Передаем ему путь к нашему скрипту
-            RedirectStandardOutput = true, // Перехватываем обычный вывод
-            RedirectStandardError = true, // Перехватываем ошибки
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var process = new Process { StartInfo = processInfo };
-
-        // Событие: когда bash делает echo (обычный лог)
-        process.OutputDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrWhiteSpace(e.Data))
+        // Запускаем UI-спиннер Spectre.Console
+        return await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots) // Стиль анимации (точки)
+            .SpinnerStyle(Style.Parse("green"))
+            .StartAsync($"[yellow]{taskTitle}[/]", async ctx =>
             {
-                // EscapeMarkup защищает от падения, если в логе будут скобки [ или ]
-                AnsiConsole.MarkupLine($"[grey] {e.Data.EscapeMarkup()}[/]");
-            }
-        };
+                var processInfo = new ProcessStartInfo
+                {
+                    FileName = "bash",
+                    Arguments = $"{scriptPath} {arguments}",
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
 
-        // Событие: когда bash плюется ошибками
-        process.ErrorDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrWhiteSpace(e.Data))
-            {
-                AnsiConsole.MarkupLine($"[red] ОШИБКА: {e.Data.EscapeMarkup()}[/]");
-            }
-        };
+                using var process = new Process { StartInfo = processInfo };
 
-        process.Start();
+                // Перехват обычного вывода (stdout)
+                process.OutputDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Data))
+                    {
+                        // 1. Пишем полный лог в файл (для истории)
+                        LoggerService.LogInfo(e.Data);
 
-        // Начинаем асинхронное чтение потоков
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+                        // 2. Обновляем текст под спиннером в интерфейсе
+                        // Обрезаем слишком длинные строки, чтобы UI не дергался
+                        string safeText = e.Data.Length > 60 ? e.Data.Substring(0, 57) + "..." : e.Data;
+                        ctx.Status($"[grey]{safeText.EscapeMarkup()}[/]");
+                    }
+                };
 
-        // Ждем завершения скрипта, не блокируя основной поток программы
-        await process.WaitForExitAsync();
+                // Перехват ошибок (stderr)
+                process.ErrorDataReceived += (sender, e) =>
+                {
+                    if (!string.IsNullOrWhiteSpace(e.Data))
+                    {
+                        LoggerService.LogError(e.Data);
+                        ctx.Status($"[red]Ошибка: {e.Data.EscapeMarkup()}[/]");
+                    }
+                };
 
-        return process.ExitCode; // 0 - успех, всё остальное - ошибка
+                LoggerService.LogInfo($"--- Запуск скрипта: {scriptName} ---");
+
+                process.Start();
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                await process.WaitForExitAsync();
+
+                LoggerService.LogInfo($"--- Завершение скрипта: {scriptName} (Код: {process.ExitCode}) ---");
+
+                return process.ExitCode;
+            });
     }
 }
