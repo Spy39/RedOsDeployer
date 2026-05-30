@@ -8,11 +8,21 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="ddd\**" />
+    <EmbeddedResource Remove="ddd\**" />
+    <None Remove="ddd\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Include="Services\NetworkService.cs" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.55.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Scripts\" />
   </ItemGroup>
 
 </Project>
