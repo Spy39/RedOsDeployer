@@ -8,72 +8,128 @@ public static class BashRunner
     /// <summary>
     /// Запускает Bash-скрипт с красивым спиннером в UI и пишет подробности в лог-файл.
     /// </summary>
-    public static async Task<int> RunWithSpinnerAsync(string taskTitle, string scriptName, string arguments = "")
+    public static async Task<int> RunWithSpinnerAsync(string spinnerText, string scriptName, string arguments = "")
     {
-        // Автоматически ищем скрипт в нашей сгенерированной папке scripts
-        string scriptPath = Path.Combine(AppPaths.Scripts, scriptName);
+        // 1. Проверяем, это системная команда (например "bash") или наш скрипт из папки?
+        string executableFile = scriptName;
+        bool isScript = scriptName.EndsWith(".sh");
 
-        if (!File.Exists(scriptPath))
+        if (isScript)
         {
-            LoggerService.LogError($"Скрипт не найден: {scriptPath}");
-            AnsiConsole.MarkupLine($"[red]Ошибка: Скрипт '{scriptName}' не найден в папке scripts![/]");
-            return -1;
+            executableFile = Path.Combine(AppPaths.Scripts, scriptName);
+            if (!File.Exists(executableFile))
+            {
+                LoggerService.LogError($"Скрипт не найден: {executableFile}");
+                AnsiConsole.MarkupLine($"[red]Ошибка: Скрипт '{scriptName}' не найден в папке scripts![/]");
+                return -1;
+            }
         }
 
-        // Запускаем UI-спиннер Spectre.Console
-        return await AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots) // Стиль анимации (точки)
-            .SpinnerStyle(Style.Parse("green"))
-            .StartAsync($"[yellow]{taskTitle}[/]", async ctx =>
-            {
-                var processInfo = new ProcessStartInfo
-                {
-                    FileName = "bash",
-                    Arguments = $"{scriptPath} {arguments}",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
+        LoggerService.LogInfo($"--- Запуск {(isScript ? "скрипта" : "команды")}: {scriptName} ---");
 
-                using var process = new Process { StartInfo = processInfo };
+        int exitCode = -1;
 
-                // Перехват обычного вывода (stdout)
-                process.OutputDataReceived += (sender, e) =>
-                {
-                    if (!string.IsNullOrWhiteSpace(e.Data))
-                    {
-                        // 1. Пишем полный лог в файл (для истории)
-                        LoggerService.LogInfo(e.Data);
+        await AnsiConsole.Status()
+                        .Spinner(Spinner.Known.Dots)
+                        .StartAsync($"[yellow]{spinnerText}[/]", async ctx =>
+                        {
+                            string finalArguments = isScript ? $"\"{executableFile}\" {arguments}" : arguments;
+                            string processFileName = isScript ? "bash" : executableFile;
 
-                        // 2. Обновляем текст под спиннером в интерфейсе
-                        // Обрезаем слишком длинные строки, чтобы UI не дергался
-                        string safeText = e.Data.Length > 60 ? e.Data.Substring(0, 57) + "..." : e.Data;
-                        ctx.Status($"[grey]{safeText.EscapeMarkup()}[/]");
-                    }
-                };
+                            var processInfo = new ProcessStartInfo
+                            {
+                                FileName = processFileName,
+                                Arguments = finalArguments,
+                                RedirectStandardOutput = true,
+                                RedirectStandardError = true,
+                                UseShellExecute = false,
+                                CreateNoWindow = true
+                            };
 
-                // Перехват ошибок (stderr)
-                process.ErrorDataReceived += (sender, e) =>
-                {
-                    if (!string.IsNullOrWhiteSpace(e.Data))
-                    {
-                        LoggerService.LogError(e.Data);
-                        ctx.Status($"[red]Ошибка: {e.Data.EscapeMarkup()}[/]");
-                    }
-                };
+                            using var process = new Process { StartInfo = processInfo };
+                            process.Start();
 
-                LoggerService.LogInfo($"--- Запуск скрипта: {scriptName} ---");
+                            // ВАЖНО: Читаем оба потока параллельно, чтобы буфер Linux не переполнился!
+                            var outputTask = process.StandardOutput.ReadToEndAsync();
+                            var errorTask = process.StandardError.ReadToEndAsync();
 
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
+                            await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync());
 
-                await process.WaitForExitAsync();
+                            exitCode = process.ExitCode;
+                            string errorOutput = errorTask.Result;
 
-                LoggerService.LogInfo($"--- Завершение скрипта: {scriptName} (Код: {process.ExitCode}) ---");
+                            if (exitCode != 0 && !string.IsNullOrWhiteSpace(errorOutput))
+                            {
+                                LoggerService.LogError($"{(isScript ? "bash" : executableFile)}: {errorOutput.Trim()}");
+                            }
+                        });
 
-                return process.ExitCode;
-            });
+        LoggerService.LogInfo($"--- Завершение {(isScript ? "скрипта" : "команды")}: {scriptName} (Код: {exitCode}) ---");
+        return exitCode;
+    }
+    /// <summary>
+    /// Выполняет сырую bash-команду "тихо" (без вывода на экран) и возвращает её текстовый результат и код.
+    /// </summary>
+    public static async Task<(int ExitCode, string Output)> ExecuteCommandAsync(string command)
+    {
+        var processInfo = new ProcessStartInfo
+        {
+            FileName = "bash",
+            Arguments = $"-c \"{command}\"", // Передаем сырую команду
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
+
+        using var process = new Process { StartInfo = processInfo };
+        process.Start();
+
+        // Читаем весь ответ от консоли Linux
+        string output = await process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+
+        return (process.ExitCode, output.Trim());
+    }
+
+    /// <summary>
+    /// Выполняет команду, выводя весь прогресс напрямую в консоль пользователя (без спиннера).
+    /// Идеально для dnf update и reposync, где нужно видеть проценты скачивания.
+    /// </summary>
+    public static async Task<int> RunInteractiveAsync(string scriptName, string arguments = "")
+    {
+        if (File.Exists(Path.Combine(AppPaths.Apps, "install_report.txt")))
+        {
+            string report = File.ReadAllText(Path.Combine(AppPaths.Apps, "install_report.txt"));
+            // Здесь рисуем таблицу через Spectre.Console.Table
+        }
+
+        string executableFile = scriptName;
+        bool isScript = scriptName.EndsWith(".sh");
+
+        if (isScript)
+        {
+            executableFile = Path.Combine(AppPaths.Scripts, scriptName);
+            if (!File.Exists(executableFile)) return -1;
+        }
+
+        string finalArguments = isScript ? $"\"{executableFile}\" {arguments}" : arguments;
+        string processFileName = isScript ? "bash" : executableFile;
+
+        var processInfo = new ProcessStartInfo
+        {
+            FileName = processFileName,
+            Arguments = finalArguments,
+            // ВАЖНО: false означает, что мы не прячем вывод, а отдаем его прямо в терминал
+            RedirectStandardOutput = false,
+            RedirectStandardError = false,
+            UseShellExecute = false
+        };
+
+        using var process = new Process { StartInfo = processInfo };
+        process.Start();
+        await process.WaitForExitAsync();
+
+        return process.ExitCode;
     }
 }

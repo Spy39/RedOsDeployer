@@ -7,7 +7,7 @@ public class AppConfig
 {
     // Список пакетов для установки и проверки
     public List<string> TargetPackages { get; set; } = new();
-
+    
     // Список принтеров
     public List<PrinterConfig> Printers { get; set; } = new();
 }

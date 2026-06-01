@@ -6,7 +6,7 @@ public static class AppPaths
 {
     // Получаем путь к папке, где лежит наш .exe (или бинарник в Linux)
     public static string BaseDirectory => AppContext.BaseDirectory;
-
+    
     // Автоматически генерируем пути к нужным нам папкам
     public static string Scripts => Path.Combine(BaseDirectory, "scripts");
     public static string Repo => Path.Combine(BaseDirectory, "repo");
