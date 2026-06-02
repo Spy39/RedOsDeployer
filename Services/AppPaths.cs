@@ -22,5 +22,12 @@ public static class AppPaths
         if (!Directory.Exists(Repo)) Directory.CreateDirectory(Repo);
         if (!Directory.Exists(Apps)) Directory.CreateDirectory(Apps);
         if (!Directory.Exists(Logs)) Directory.CreateDirectory(Logs);
+
+        // Автоматически создаем папку для принтеров и КриптоПро
+        string printersPath = Path.Combine(Apps, "Printers");
+        if (!Directory.Exists(printersPath)) Directory.CreateDirectory(printersPath);
+
+        string cryptoPath = Path.Combine(Apps, "CryptoPro");
+        if (!Directory.Exists(cryptoPath)) Directory.CreateDirectory(cryptoPath);
     }
 }

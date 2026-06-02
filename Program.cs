@@ -72,9 +72,9 @@ while (true)
                 "  ",
 
                 "[grey]=== СИСТЕМНЫЕ НАСТРОЙКИ ===[/]",
-                "6. Базовые твики (Время Dual-Boot, Служба печати, Шрифты)",
-                "7. Настройка GRUB (Dual-Boot с Windows)",
-                "8. Удаление старых (фантомных) ядер Linux",
+                "6. Применение базовых твиков ОС (Шрифты, Печать, Время)",
+                "7. Настройка загрузчика GRUB (Выбор ОС и интерфейса)",
+                "8. Очистка старых ядер ОС (Освобождение места)",
                 "   ",
 
                 "[grey]=== ОБСЛУЖИВАНИЕ ФЛЕШКИ (Нужен интернет) ===[/]",
@@ -83,9 +83,11 @@ while (true)
                 "11. Быстрая проверка скачанных версий ПО (без интернета)",
                 "    ",
 
-                "[grey]=== ПРОВЕРКА ===[/]",
-                "12. Финальная диагностика",
+                "[grey]=== ПРОВЕРКА И ЗАВЕРШЕНИЕ ===[/]",
+                "12. Финальная диагностика (Оборудование и ПО)",
+                "13. Очистка следов установки (Кэш, tmp, история)",
                 "0. Выход"
+
                 }));
 
     if (choice.StartsWith("[grey]") || string.IsNullOrWhiteSpace(choice))
@@ -121,7 +123,7 @@ while (true)
             }
             AnsiConsole.MarkupLine("\n[yellow]Запуск онлайн обновления системы...[/]");
 
-            int resultOnline = await BashRunner.RunInteractiveAsync("bash", "-c \"dnf update -y\"");
+            int resultOnline = await BashRunner.RunInteractiveAsync("2-online_update.sh");
 
             var panelOnline = new Panel(resultOnline == 0
                 ? "[green]Система успешно обновлена из сети Интернет.[/]"
@@ -231,61 +233,71 @@ while (true)
             AnsiConsole.Write(panelPrinter);
             break;
 
-        case "6. Базовые твики (Время Dual-Boot, Служба печати, Шрифты)":
+        case "6. Применение базовых твиков ОС (Шрифты, Печать, Время)":
             AnsiConsole.MarkupLine("\n[yellow]Применение системных настроек...[/]");
 
-            int resultTweaks = await BashRunner.RunWithSpinnerAsync("Настройка служб ОС...", "system_tweaks.sh");
+            int resultTweaks = await BashRunner.RunWithSpinnerAsync("Настройка служб ОС...", "5-system_tweaks.sh");
 
             var panelTweaks = new Panel(resultTweaks == 0
                 ? "[green]Службы печати, шрифты и Dual-Boot время успешно настроены.[/]"
-                : $"[red]Произошла ошибка (Код: {resultTweaks}). Проверьте файл логов.[/]")
+                : $"[red]Произошла ошибка (Код: {resultTweaks}).[/]")
             { Header = new PanelHeader(resultTweaks == 0 ? "[green]УСПЕХ[/]" : "[red]ОШИБКА[/]"), Border = BoxBorder.Rounded };
             AnsiConsole.Write(panelTweaks);
             break;
 
-        case "7. Настройка GRUB (Dual-Boot с Windows)":
+        case "7. Настройка загрузчика GRUB (Выбор ОС и интерфейса)":
             AnsiConsole.MarkupLine("\n[yellow]Анализ меню загрузчика GRUB...[/]");
 
             bool isUefi = Directory.Exists("/sys/firmware/efi");
-            if (isUefi)
+            string grubCfgPath = isUefi
+                ? "$(find /boot/efi/EFI -name 'grub.cfg' | grep -i 'red' | head -n 1)"
+                : "/boot/grub2/grub.cfg";
+
+            // Считываем список систем прямо из файла GRUB
+            string getMenuCmd = $"awk -F\\' '/menuentry / {{print $2}}' {grubCfgPath}";
+            var (exitCode, output) = await BashRunner.ExecuteCommandAsync(getMenuCmd);
+
+            if (exitCode == 0 && !string.IsNullOrWhiteSpace(output))
             {
-                string getMenuCmd = "cat $(find /boot/efi/EFI -name 'grub.cfg' | grep -i 'red' | head -n 1) | awk -F\\' '/menuentry / {print $2}'";
-                var (exitCode, output) = await BashRunner.ExecuteCommandAsync(getMenuCmd);
+                var osList = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
-                if (exitCode == 0 && !string.IsNullOrWhiteSpace(output))
+                // Выводим пронумерованный список на экран
+                AnsiConsole.MarkupLine("\n[cyan]Найденные операционные системы:[/]");
+                for (int i = 0; i < osList.Length; i++)
                 {
-                    var osList = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).ToList();
-                    osList.Add("0. Отмена");
+                    AnsiConsole.MarkupLine($"[[[white]{i}[/]]] [green]{osList[i]}[/]");
+                }
 
-                    var selectedOs = AnsiConsole.Prompt(
-                        new SelectionPrompt<string>()
-                            .Title("\n[cyan]Выберите систему для загрузки по умолчанию:[/]")
-                            .PageSize(10)
-                            .HighlightStyle(new Style(foreground: Color.Green))
-                            .AddChoices(osList)
-                    );
+                if (isUefi)
+                {
+                    AnsiConsole.MarkupLine("\n[yellow]Режим UEFI:[/] В этом режиме система выбирается по её точному названию.");
+                    string selectedName = AnsiConsole.Ask<string>("[cyan]Скопируйте и вставьте точное НАЗВАНИЕ нужной ОС из списка выше:[/]");
 
-                    if (selectedOs == "0. Отмена") break;
+                    int resultGrub = await BashRunner.RunWithSpinnerAsync("Настройка UEFI GRUB...", "6-setup_grub.sh", $"uefi \"{selectedName}\"");
 
-                    await BashRunner.RunWithSpinnerAsync("Установка приоритета...", "bash", $"-c \"grub2-set-default '{selectedOs}' && grub2-mkconfig -o $(find /boot/efi/EFI -name 'grub.cfg' | grep -i 'red' | head -n 1)\"");
-                    AnsiConsole.MarkupLine($"\n[green]Готово! Система '[cyan]{selectedOs}[/]' будет загружаться первой.[/]");
+                    AnsiConsole.Write(new Panel(resultGrub == 0 ? $"[green]Система '{selectedName}' будет загружаться первой.[/]" : "[red]Ошибка при настройке GRUB.[/]")
+                    { Header = new PanelHeader(resultGrub == 0 ? "[green]УСПЕХ[/]" : "[red]ОШИБКА[/]"), Border = BoxBorder.Rounded });
                 }
                 else
                 {
-                    AnsiConsole.MarkupLine("[red]Не удалось прочитать меню GRUB. Убедитесь, что система использует UEFI.[/]");
+                    AnsiConsole.MarkupLine("\n[yellow]Режим Legacy BIOS:[/] Выбор осуществляется по номеру. Мерцание загрузчика будет отключено.");
+                    int selectedIndex = AnsiConsole.Ask<int>("[cyan]Введите ЦИФРУ (индекс) нужной ОС:[/]");
+
+                    int resultGrub = await BashRunner.RunWithSpinnerAsync("Настройка Legacy GRUB...", "6-setup_grub.sh", $"legacy {selectedIndex}");
+
+                    AnsiConsole.Write(new Panel(resultGrub == 0 ? $"[green]Индекс '{selectedIndex}' установлен по умолчанию. Темы и мерцание отключены.[/]" : "[red]Ошибка при настройке GRUB.[/]")
+                    { Header = new PanelHeader(resultGrub == 0 ? "[green]УСПЕХ[/]" : "[red]ОШИБКА[/]"), Border = BoxBorder.Rounded });
                 }
             }
             else
             {
-                AnsiConsole.MarkupLine("[yellow]Обнаружен Legacy BIOS. Установка Windows по индексу 2...[/]");
-                await BashRunner.RunWithSpinnerAsync("Настройка Legacy GRUB...", "bash", "-c \"grub2-set-default 2 && grub2-mkconfig -o /boot/grub2/grub.cfg\"");
-                AnsiConsole.MarkupLine("[green]Готово! Приоритет изменен на индекс 2.[/]");
+                AnsiConsole.MarkupLine("[red]Не удалось прочитать меню GRUB. Убедитесь, что система установлена корректно.[/]");
             }
             break;
 
-        case "8. Удаление старых (фантомных) ядер Linux":
+        case "8. Очистка старых ядер ОС (Освобождение места)":
             AnsiConsole.MarkupLine("\n[cyan]Поиск старых версий ядра ОС...[/]");
-            int resultKernels = await BashRunner.RunWithSpinnerAsync("Очистка фантомных ядер...", "clean_kernels.sh");
+            int resultKernels = await BashRunner.RunWithSpinnerAsync("Очистка фантомных ядер...", "7-clean_kernels.sh");
 
             AnsiConsole.Write(new Panel(resultKernels == 0 ? "[green]Старые ядра успешно удалены, место освобождено.[/]" : "[red]Ошибка при удалении ядер (возможно, старых версий нет).[/]")
             { Header = new PanelHeader(resultKernels == 0 ? "[green]УСПЕХ[/]" : "[red]ОШИБКА[/]"), Border = BoxBorder.Rounded });
@@ -383,8 +395,8 @@ while (true)
             }
             break;
 
-        case "12. Финальная диагностика":
-            AnsiConsole.MarkupLine("\n[yellow]Сбор сведений о системе...[/]");
+        case "12. Финальная диагностика (Оборудование и ПО)":
+            AnsiConsole.MarkupLine("\n[yellow]Сбор сведений о системе и оборудовании...[/]");
 
             var diagTable = new Table()
                 .Border(TableBorder.Rounded)
@@ -398,10 +410,18 @@ while (true)
                 .AddColumn(new TableColumn("Настройка").Centered())
                 .AddColumn(new TableColumn("Статус").Centered());
 
+            // НОВАЯ ТАБЛИЦА ДЛЯ ПЕРИФЕРИИ
+            var hwTable = new Table()
+                .Border(TableBorder.Rounded)
+                .Title("[cyan]Отчет о периферии (Аппаратная часть)[/]")
+                .AddColumn(new TableColumn("Устройство").Centered())
+                .AddColumn(new TableColumn("Статус").Centered());
+
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync("[yellow]Выполнение проверок...[/]", async ctx =>
                 {
+                    // 1. Проверка ПО
                     foreach (var pkg in ConfigManager.Config.TargetPackages)
                     {
                         var (exitCode, _) = await BashRunner.ExecuteCommandAsync($"rpm -q {pkg}");
@@ -409,6 +429,7 @@ while (true)
                         else diagTable.AddRow(pkg, "[red]ОШИБКА / НЕТ[/]");
                     }
 
+                    // 2. Проверка служб
                     var (cupsCode, _) = await BashRunner.ExecuteCommandAsync("systemctl is-active cups");
                     tweaksTable.AddRow("Служба печати (CUPS)", cupsCode == 0 ? "[green]АКТИВНА[/]" : "[red]ОТКЛЮЧЕНА[/]");
 
@@ -420,12 +441,31 @@ while (true)
 
                     var (grubCode, grubOut) = await BashRunner.ExecuteCommandAsync("grubby --default-title");
                     tweaksTable.AddRow("Загрузчик по умолчанию", $"[cyan]{grubOut.Trim()}[/]");
+
+                    // 3. ПРОВЕРКА ПЕРИФЕРИИ
+                    // Ищем видеоустройства
+                    var (camCode, _) = await BashRunner.ExecuteCommandAsync("ls /dev/video* >/dev/null 2>&1");
+                    hwTable.AddRow("Веб-камера", camCode == 0 ? "[green]ОБНАРУЖЕНА[/]" : "[red]НЕ НАЙДЕНА[/]");
+
+                    // Ищем устройства захвата звука (микрофоны)
+                    var (micCode, _) = await BashRunner.ExecuteCommandAsync("arecord -l 2>/dev/null | grep -q '^card'");
+                    hwTable.AddRow("Микрофон", micCode == 0 ? "[green]ОБНАРУЖЕН[/]" : "[red]НЕ НАЙДЕН[/]");
                 });
 
             AnsiConsole.Write(diagTable);
             AnsiConsole.WriteLine();
             AnsiConsole.Write(tweaksTable);
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(hwTable);
             AnsiConsole.MarkupLine("\n[green]=== ДИАГНОСТИКА ЗАВЕРШЕНА ===[/]");
+            break;
+
+        case "13. Очистка следов установки (Кэш, tmp, история)":
+            AnsiConsole.MarkupLine("\n[yellow]Удаление временных файлов и кэша...[/]");
+            int resultClean = await BashRunner.RunWithSpinnerAsync("Выполнение предрелизной очистки...", "4-clean_system.sh");
+
+            AnsiConsole.Write(new Panel(resultClean == 0 ? "[green]Система успешно очищена и готова к работе.[/]" : "[red]Возникли предупреждения при очистке.[/]")
+            { Header = new PanelHeader(resultClean == 0 ? "[green]УСПЕХ[/]" : "[red]ВНИМАНИЕ[/]"), Border = BoxBorder.Rounded });
             break;
 
         case "0. Выход":

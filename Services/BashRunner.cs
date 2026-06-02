@@ -8,9 +8,11 @@ public static class BashRunner
     /// <summary>
     /// Запускает Bash-скрипт с красивым спиннером в UI и пишет подробности в лог-файл.
     /// </summary>
+    /// <summary>
+    /// Запускает Bash-скрипт с красивым спиннером в UI и пишет ПОЛНЫЙ вывод в лог-файл.
+    /// </summary>
     public static async Task<int> RunWithSpinnerAsync(string spinnerText, string scriptName, string arguments = "")
     {
-        // 1. Проверяем, это системная команда (например "bash") или наш скрипт из папки?
         string executableFile = scriptName;
         bool isScript = scriptName.EndsWith(".sh");
 
@@ -30,46 +32,58 @@ public static class BashRunner
         int exitCode = -1;
 
         await AnsiConsole.Status()
-                        .Spinner(Spinner.Known.Dots)
-                        .StartAsync($"[yellow]{spinnerText}[/]", async ctx =>
-                        {
-                            string finalArguments = isScript ? $"\"{executableFile}\" {arguments}" : arguments;
-                            string processFileName = isScript ? "bash" : executableFile;
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"[yellow]{spinnerText}[/]", async ctx =>
+            {
+                string finalArguments = isScript ? $"\"{executableFile}\" {arguments}" : arguments;
+                string processFileName = isScript ? "bash" : executableFile;
 
-                            var processInfo = new ProcessStartInfo
-                            {
-                                FileName = processFileName,
-                                Arguments = finalArguments,
-                                RedirectStandardOutput = true,
-                                RedirectStandardError = true,
-                                UseShellExecute = false,
-                                CreateNoWindow = true
-                            };
+                var processInfo = new ProcessStartInfo
+                {
+                    FileName = processFileName,
+                    Arguments = finalArguments,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
 
-                            using var process = new Process { StartInfo = processInfo };
-                            process.Start();
+                using var process = new Process { StartInfo = processInfo };
+                process.Start();
 
-                            // ВАЖНО: Читаем оба потока параллельно, чтобы буфер Linux не переполнился!
-                            var outputTask = process.StandardOutput.ReadToEndAsync();
-                            var errorTask = process.StandardError.ReadToEndAsync();
+                // Читаем оба потока параллельно
+                var outputTask = process.StandardOutput.ReadToEndAsync();
+                var errorTask = process.StandardError.ReadToEndAsync();
 
-                            await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync());
+                await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync());
 
-                            exitCode = process.ExitCode;
-                            string errorOutput = errorTask.Result;
+                exitCode = process.ExitCode;
+                string standardOutput = outputTask.Result;
+                string errorOutput = errorTask.Result;
 
-                            if (exitCode != 0 && !string.IsNullOrWhiteSpace(errorOutput))
-                            {
-                                LoggerService.LogError($"{(isScript ? "bash" : executableFile)}: {errorOutput.Trim()}");
-                            }
-                        });
+                // --- РАСШИРЕННОЕ ЛОГИРОВАНИЕ ---
+                // Записываем весь стандартный вывод скрипта в файл логов (невидимо для пользователя)
+                if (!string.IsNullOrWhiteSpace(standardOutput))
+                {
+                    LoggerService.LogInfo($"[ПОДРОБНЫЙ ВЫВОД {scriptName}]:\n{standardOutput.Trim()}");
+                }
+
+                // Записываем все ошибки
+                if (!string.IsNullOrWhiteSpace(errorOutput))
+                {
+                    // Bash часто пишет предупреждения в поток ошибок, даже если exitCode == 0, поэтому пишем всё
+                    string logPrefix = exitCode == 0 ? "ПРЕДУПРЕЖДЕНИЯ" : "КРИТИЧЕСКИЕ ОШИБКИ";
+                    LoggerService.LogError($"[{logPrefix} {scriptName}]:\n{errorOutput.Trim()}");
+                }
+            });
 
         LoggerService.LogInfo($"--- Завершение {(isScript ? "скрипта" : "команды")}: {scriptName} (Код: {exitCode}) ---");
         return exitCode;
     }
-    /// <summary>
-    /// Выполняет сырую bash-команду "тихо" (без вывода на экран) и возвращает её текстовый результат и код.
-    /// </summary>
+    
+         /// <summary>
+         /// Выполняет сырую bash-команду "тихо" (без вывода на экран) и возвращает её текстовый результат и код.
+         /// </summary>
     public static async Task<(int ExitCode, string Output)> ExecuteCommandAsync(string command)
     {
         var processInfo = new ProcessStartInfo

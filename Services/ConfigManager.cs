@@ -20,13 +20,14 @@ public static class ConfigManager
             // Если файла нет, генерируем дефолтные настройки
             Config = new AppConfig
             {
-                TargetPackages = ["r7-office", "r7organizer", "R7Grafika", "yandex-browser-stable", "max", "redoswelcome"],
+                TargetPackages = ["r7-office", "r7organizer", "r7draw-desktop", "yandex-browser-stable", "max", "redoswelcome"],
                 Printers =
                 [
-                    new PrinterConfig { Name = "Brother (T220, L2500DR)", FolderName = "BROTHER", InstallScript = "install.sh" },
-                    new PrinterConfig { Name = "Canon MF (3010, 264dw)", FolderName = "CANON_MF", InstallScript = "install.sh" },
-                    new PrinterConfig { Name = "Canon LBP (L11121E / LBP2900)", FolderName = "CANON_LBP", InstallScript = "install.sh" },
-                    new PrinterConfig { Name = "HP (M134fn, 179fnw, 1510)", FolderName = "HP", InstallScript = "install.sh" }
+                    new PrinterConfig { Name = "Brother (T220, L2500DR)", FolderName = "Printers/Brother/T220", InstallScript = "install.sh" },
+                    new PrinterConfig { Name = "Pantum (M6500 Series)", FolderName = "Printers/Pantum/M6500", InstallScript = "install.sh" },
+                    new PrinterConfig { Name = "HP (M134fn, 179fnw, 1510)", FolderName = "Printers/HP/M134fn", InstallScript = "install.sh" },
+                    new PrinterConfig { Name = "Canon MF (3010, 264dw)", FolderName = "Printers/Canon/MF3010", InstallScript = "install.sh" },
+                    new PrinterConfig { Name = "Canon LBP (L11121E / LBP2900)", FolderName = "Printers/Canon/LBP2900", InstallScript = "install.sh" }
                 ]
             };
 
